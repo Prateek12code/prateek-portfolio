@@ -905,70 +905,161 @@ function setupContact() {
       }
     });
   }
-
-  // Form: Formspree if configured, else fallback to mailto
-  if (form) {
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-
-      const action = form.getAttribute("action") || "";
-      const isFormspreeReady =
-        action.includes("formspree.io/f/") && !action.endsWith("/xaqdlbqg");
-
-      const fd = new FormData(form);
-      const name = (fd.get("name") || "").toString().trim();
-      const message = (fd.get("message") || "").toString().trim();
-      const reply = (fd.get("_replyto") || "").toString().trim();
-
-      if (!name || !message) {
-        statusEl.textContent = "Please fill name + message.";
-        showToast("Name + message needed");
-        return;
-      }
-
-      // If Formspree configured -> send AJAX
-      if (isFormspreeReady) {
-        statusEl.textContent = "Sending…";
-        try {
-          const res = await fetch(action, {
-            method: "POST",
-            headers: { Accept: "application/json" },
-            body: fd,
-          });
-
-          if (res.ok) {
-            statusEl.textContent = "Sent ✅";
-            showToast("Sent ✅");
-            form.reset();
-          } else {
-            statusEl.textContent = "Couldn’t send. Using email fallback…";
-            mailtoFallback(name, message, reply);
-          }
-        } catch {
-          statusEl.textContent = "Offline / blocked. Using email fallback…";
-          mailtoFallback(name, message, reply);
-        }
-      } else {
-        // mailto fallback
-        mailtoFallback(name, message, reply);
-      }
-    });
-  }
-
-  function mailtoFallback(name, message, reply) {
-    const to = "prateekshukla@pixxivo.com";
-    const subject = encodeURIComponent(`Website message from ${name}`);
-    const body = encodeURIComponent(
-      `Name: ${name}\nEmail: ${reply || "(not provided)"}\n\nMessage:\n${message}\n`,
-    );
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-    if (statusEl) statusEl.textContent = "Opening your email app…";
-    showToast("Opening email…");
-  }
 }
 
 // Run AFTER DOM is ready
 document.addEventListener("DOMContentLoaded", setupContact);
+
+function setupContactResend() {
+  const form = document.getElementById("contactForm");
+  if (!form) return;
+
+  const sendBtn = document.getElementById("sendBtn");
+  const msg = document.getElementById("message");
+  const msgCount = document.getElementById("msgCount");
+
+  // helper: find error box by field name
+  const errBox = (name) =>
+    form.querySelector(`.field__error[data-error-for="${name}"]`);
+
+  // helper: set / clear error UI
+  const setError = (name, text) => {
+    const box = errBox(name);
+    const input = form.querySelector(`[name="${name}"]`);
+    if (box) box.textContent = text || "";
+    if (input) input.classList.toggle("is-invalid", Boolean(text));
+  };
+
+  const clearAllErrors = () =>
+    ["name", "email", "message"].forEach((k) => setError(k, ""));
+
+  // optional toast: if you already have showToast in your project, it will use it
+  const toast = (text) => {
+    if (typeof window.showToast === "function") window.showToast(text);
+  };
+
+  // button loading state
+  const setLoading = (on) => {
+    if (!sendBtn) return;
+    sendBtn.disabled = on;
+    sendBtn.classList.toggle("is-loading", on); // you can style this if you want
+  };
+
+  // counter
+  const updateCount = () => {
+    if (!msgCount || !msg) return;
+    msgCount.textContent = String(msg.value.length);
+  };
+  updateCount();
+  if (msg) msg.addEventListener("input", updateCount);
+
+  // validation
+  const isEmailValid = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email);
+
+  const validate = () => {
+    clearAllErrors();
+
+    const name = (form.name?.value || "").trim();
+    const email = (form.email?.value || "").trim();
+    const message = (form.message?.value || "").trim();
+
+    let ok = true;
+
+    if (name.length < 2) {
+      setError("name", "Name should be at least 2 characters.");
+      ok = false;
+    }
+    if (name.length > 60) {
+      setError("name", "Name is too long (max 60).");
+      ok = false;
+    }
+
+    // your HTML has required email, so keep it required
+    if (!email) {
+      setError("email", "Email is required.");
+      ok = false;
+    } else if (!isEmailValid(email)) {
+      setError("email", "Please enter a valid email.");
+      ok = false;
+    } else if (email.length > 120) {
+      setError("email", "Email is too long (max 120).");
+      ok = false;
+    }
+
+    if (message.length < 10) {
+      setError("message", "Message should be at least 10 characters.");
+      ok = false;
+    }
+    if (message.length > 600) {
+      setError("message", "Message is too long (max 600).");
+      ok = false;
+    }
+
+    return { ok, name, email, message };
+  };
+
+  // live clear errors as they type
+  ["name", "email", "message"].forEach((k) => {
+    const el = form.querySelector(`[name="${k}"]`);
+    if (!el) return;
+    el.addEventListener("input", () => setError(k, ""));
+    el.addEventListener("blur", () => validate()); // optional: validates on blur
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    // honeypot check
+    const company = (form.company?.value || "").trim();
+    if (company) {
+      // bot filled it; pretend success to not reveal trap
+      form.reset();
+      updateCount();
+      toast("Sent ✅");
+      return;
+    }
+
+    const v = validate();
+    if (!v.ok) {
+      toast("Fix the fields ↑");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: v.name,
+          email: v.email,
+          message: v.message,
+          company: "", // keep empty
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.ok) {
+        form.reset();
+        updateCount();
+        clearAllErrors();
+        toast("Sent ✅");
+      } else {
+        // show server error if available
+        toast(data.error || "Couldn’t send. Try again.");
+      }
+    } catch (err) {
+      toast("Network error. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  });
+}
+
+// run after DOM is ready
+document.addEventListener("DOMContentLoaded", setupContactResend);
 
 /* =========================
    CASE STUDY OVERLAY (Projects + About)
@@ -988,12 +1079,12 @@ const CASE_DATA = {
     media: [
       {
         type: "image",
-        src: "images/krishirakshak-device.webp",
+        src: "/images/krishirakshak-device.webp",
         alt: "KrishiRakshak device",
       },
       {
         type: "image",
-        src: "images/krishirakshak-scan.webp",
+        src: "/images/krishirakshak-scan.webp",
         alt: "KrishiRakshak scan screen",
       },
     ],
@@ -1032,12 +1123,12 @@ const CASE_DATA = {
     media: [
       {
         type: "video",
-        src: "images/pixxivo-vid.mp4",
-        poster: "images/pixxivo-device.webp",
+        src: "/images/pixxivo-vid.mp4",
+        poster: "/images/pixxivo-device.webp",
       },
       {
         type: "image",
-        src: "images/pixxivo-device.webp",
+        src: "/images/pixxivo-device.webp",
         alt: "Pixxivo device",
       },
     ],
@@ -1076,7 +1167,7 @@ const CASE_DATA = {
     media: [
       {
         type: "image",
-        src: "images/prateek-illustration.webp",
+        src: "/images/prateek-illustration.webp",
         alt: "Prateek illustration",
       },
     ],

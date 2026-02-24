@@ -2236,3 +2236,35 @@ body.isLoading {
     grid-template-columns: 1fr;
   }
 }
+
+/* loading state */
+#sendBtn.is-loading {
+  pointer-events: none;
+  filter: brightness(0.98);
+}
+#sendBtn .btn__spin {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(0, 0, 0, 0.18);
+  border-top-color: rgba(0, 0, 0, 0.55);
+  display: none;
+  animation: spin 0.8s linear infinite;
+}
+#sendBtn.is-loading .btn__spin {
+  display: inline-block;
+}
+#sendBtn.is-loading .btn__txt {
+  opacity: 0.75;
+}
+
+.field__input.is-invalid {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, #ff3b3b);
+  outline-offset: 2px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
