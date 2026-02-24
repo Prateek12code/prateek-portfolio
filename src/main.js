@@ -857,35 +857,141 @@ function setupClockOfClocks() {
   setInterval(tick, 1000);
 }
 
+/* =========================
+   CONTACT (COPY + RESEND VIA WORKER)
+   - Uses Cloudflare Worker endpoint (workers.dev or your custom domain route)
+   - No functions folder needed
+========================= */
+
 function setupContact() {
-  const toast = document.getElementById("toast");
+  const toastEl = document.getElementById("toast");
   const copyBtn = document.getElementById("copyEmailBtn");
   const form = document.getElementById("contactForm");
   const statusEl = document.getElementById("formStatus");
+  const sendBtn = document.getElementById("sendBtn");
+  const msg = document.getElementById("message");
+  const msgCount = document.getElementById("msgCount");
 
+  // ✅ SET THIS to your Worker endpoint:
+  // If you haven't added a route like prateekcode.me/api/contact yet,
+  // use the workers.dev URL.
+  const WORKER_ENDPOINT =
+    "https://prateek-contact.krishaeo-code.workers.dev/contact";
+  // Later when you add a route, you can change to:
+  // const WORKER_ENDPOINT = "/api/contact";
+
+  // ---------- Toast ----------
   const showToast = (msg) => {
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.classList.add("is-show");
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.add("is-show");
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => toast.classList.remove("is-show"), 1400);
+    showToast._t = setTimeout(() => toastEl.classList.remove("is-show"), 1600);
   };
 
-  // Copy email
+  // ---------- Status text ----------
+  const setStatus = (text) => {
+    if (!statusEl) return;
+    statusEl.textContent = text || "";
+  };
+
+  // ---------- Button loading ----------
+  const setLoading = (on) => {
+    if (!sendBtn) return;
+    sendBtn.disabled = on;
+    sendBtn.classList.toggle("is-loading", on);
+    // optional: change text inside button if you have .btn__txt
+    const txt = sendBtn.querySelector(".btn__txt");
+    if (txt) txt.textContent = on ? "Sending…" : "Send";
+  };
+
+  // ---------- Counter ----------
+  const updateCount = () => {
+    if (!msgCount || !msg) return;
+    msgCount.textContent = String(msg.value.length);
+  };
+  updateCount();
+  if (msg) msg.addEventListener("input", updateCount);
+
+  // ---------- Error helpers ----------
+  const errBox = (name) =>
+    form?.querySelector(`.field__error[data-error-for="${name}"]`);
+
+  const setError = (name, text) => {
+    const box = errBox(name);
+    const input = form?.querySelector(`[name="${name}"]`);
+    if (box) box.textContent = text || "";
+    if (input) input.classList.toggle("is-invalid", Boolean(text));
+  };
+
+  const clearAllErrors = () => {
+    ["name", "email", "message"].forEach((k) => setError(k, ""));
+  };
+
+  // live clear on input
+  ["name", "email", "message"].forEach((k) => {
+    const el = form?.querySelector(`[name="${k}"]`);
+    if (!el) return;
+    el.addEventListener("input", () => setError(k, ""));
+  });
+
+  // ---------- Validation ----------
+  const isEmailValid = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email);
+
+  const validate = () => {
+    clearAllErrors();
+
+    const name = (form?.name?.value || "").trim();
+    const email = (form?.email?.value || "").trim();
+    const message = (form?.message?.value || "").trim();
+
+    let ok = true;
+
+    if (name.length < 2) {
+      setError("name", "Name should be at least 2 characters.");
+      ok = false;
+    } else if (name.length > 60) {
+      setError("name", "Name is too long (max 60).");
+      ok = false;
+    }
+
+    if (!email) {
+      setError("email", "Email is required.");
+      ok = false;
+    } else if (!isEmailValid(email)) {
+      setError("email", "Please enter a valid email.");
+      ok = false;
+    } else if (email.length > 120) {
+      setError("email", "Email is too long (max 120).");
+      ok = false;
+    }
+
+    if (message.length < 10) {
+      setError("message", "Message should be at least 10 characters.");
+      ok = false;
+    } else if (message.length > 600) {
+      setError("message", "Message is too long (max 600).");
+      ok = false;
+    }
+
+    return { ok, name, email, message };
+  };
+
+  // ---------- Copy email ----------
   if (copyBtn) {
     copyBtn.addEventListener("click", async (e) => {
-      e.preventDefault(); // IMPORTANT (if button is inside form)
+      e.preventDefault();
       e.stopPropagation();
 
       const email = copyBtn.dataset.email || "prateekshukla@pixxivo.com";
 
       try {
-        // Clipboard API requires secure context (HTTPS/localhost)
+        // Clipboard API needs HTTPS/localhost
         if (!window.isSecureContext) throw new Error("Not HTTPS");
         await navigator.clipboard.writeText(email);
         showToast("Copied: " + email);
-      } catch (err) {
-        // Strong fallback (better mobile support)
+      } catch {
+        // fallback
         const ta = document.createElement("textarea");
         ta.value = email;
         ta.setAttribute("readonly", "");
@@ -905,161 +1011,76 @@ function setupContact() {
       }
     });
   }
-}
 
-// Run AFTER DOM is ready
-document.addEventListener("DOMContentLoaded", setupContact);
+  // ---------- Submit (Resend via Worker) ----------
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      setStatus("");
 
-function setupContactResend() {
-  const form = document.getElementById("contactForm");
-  if (!form) return;
-
-  const sendBtn = document.getElementById("sendBtn");
-  const msg = document.getElementById("message");
-  const msgCount = document.getElementById("msgCount");
-
-  // helper: find error box by field name
-  const errBox = (name) =>
-    form.querySelector(`.field__error[data-error-for="${name}"]`);
-
-  // helper: set / clear error UI
-  const setError = (name, text) => {
-    const box = errBox(name);
-    const input = form.querySelector(`[name="${name}"]`);
-    if (box) box.textContent = text || "";
-    if (input) input.classList.toggle("is-invalid", Boolean(text));
-  };
-
-  const clearAllErrors = () =>
-    ["name", "email", "message"].forEach((k) => setError(k, ""));
-
-  // optional toast: if you already have showToast in your project, it will use it
-  const toast = (text) => {
-    if (typeof window.showToast === "function") window.showToast(text);
-  };
-
-  // button loading state
-  const setLoading = (on) => {
-    if (!sendBtn) return;
-    sendBtn.disabled = on;
-    sendBtn.classList.toggle("is-loading", on); // you can style this if you want
-  };
-
-  // counter
-  const updateCount = () => {
-    if (!msgCount || !msg) return;
-    msgCount.textContent = String(msg.value.length);
-  };
-  updateCount();
-  if (msg) msg.addEventListener("input", updateCount);
-
-  // validation
-  const isEmailValid = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email);
-
-  const validate = () => {
-    clearAllErrors();
-
-    const name = (form.name?.value || "").trim();
-    const email = (form.email?.value || "").trim();
-    const message = (form.message?.value || "").trim();
-
-    let ok = true;
-
-    if (name.length < 2) {
-      setError("name", "Name should be at least 2 characters.");
-      ok = false;
-    }
-    if (name.length > 60) {
-      setError("name", "Name is too long (max 60).");
-      ok = false;
-    }
-
-    // your HTML has required email, so keep it required
-    if (!email) {
-      setError("email", "Email is required.");
-      ok = false;
-    } else if (!isEmailValid(email)) {
-      setError("email", "Please enter a valid email.");
-      ok = false;
-    } else if (email.length > 120) {
-      setError("email", "Email is too long (max 120).");
-      ok = false;
-    }
-
-    if (message.length < 10) {
-      setError("message", "Message should be at least 10 characters.");
-      ok = false;
-    }
-    if (message.length > 600) {
-      setError("message", "Message is too long (max 600).");
-      ok = false;
-    }
-
-    return { ok, name, email, message };
-  };
-
-  // live clear errors as they type
-  ["name", "email", "message"].forEach((k) => {
-    const el = form.querySelector(`[name="${k}"]`);
-    if (!el) return;
-    el.addEventListener("input", () => setError(k, ""));
-    el.addEventListener("blur", () => validate()); // optional: validates on blur
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-
-    // honeypot check
-    const company = (form.company?.value || "").trim();
-    if (company) {
-      // bot filled it; pretend success to not reveal trap
-      form.reset();
-      updateCount();
-      toast("Sent ✅");
-      return;
-    }
-
-    const v = validate();
-    if (!v.ok) {
-      toast("Fix the fields ↑");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: v.name,
-          email: v.email,
-          message: v.message,
-          company: "", // keep empty
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok && data.ok) {
+      // honeypot (your input name="company")
+      const company = (form.company?.value || "").trim();
+      if (company) {
+        // bot -> pretend success
         form.reset();
         updateCount();
         clearAllErrors();
-        toast("Sent ✅");
-      } else {
-        // show server error if available
-        toast(data.error || "Couldn’t send. Try again.");
+        setStatus("Sent ✅");
+        showToast("Sent ✅");
+        return;
       }
-    } catch (err) {
-      toast("Network error. Try again.");
-    } finally {
-      setLoading(false);
-    }
-  });
+
+      const v = validate();
+      if (!v.ok) {
+        showToast("Fix the fields ↑");
+        setStatus("Please fix highlighted fields.");
+        return;
+      }
+
+      setLoading(true);
+      setStatus("Sending…");
+
+      try {
+        const res = await fetch(WORKER_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: v.name,
+            email: v.email,
+            message: v.message,
+            company: "", // keep empty
+          }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok && data.ok) {
+          form.reset();
+          updateCount();
+          clearAllErrors();
+          setStatus("Sent ✅");
+          showToast("Sent ✅");
+        } else {
+          // show per-field errors if backend returns "field"
+          if (data.field && data.error) setError(data.field, data.error);
+
+          setStatus(data.error || "Couldn’t send. Try again.");
+          showToast(data.error || "Couldn’t send. Try again.");
+          console.log("Worker error:", data);
+        }
+      } catch (err) {
+        setStatus("Network error. Try again.");
+        showToast("Network error. Try again.");
+        console.log("Network error:", err);
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
 }
 
-// run after DOM is ready
-document.addEventListener("DOMContentLoaded", setupContactResend);
+// run once
+document.addEventListener("DOMContentLoaded", setupContact);
 
 /* =========================
    CASE STUDY OVERLAY (Projects + About)
